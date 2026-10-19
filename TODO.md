@@ -26,6 +26,10 @@ up to date at the end of every milestone.
       goes without a read (I2), the modes that take power refused like
       resume (I3), and M1-M9 (see Decisions). Scenarios S1-S7 of the
       reviewer, inverted, and one test per point in `test/review.test.js`.
+- [x] **Milestone 1 fixes — approval** (2026-10-19): commands need the real
+      ID (R1), DNS raced against the deadline (R2), the pause sent again
+      carries the check (R3), `/data` IDs pruned (R4). A1-A4 inverted in
+      `test/review.test.js`.
 - [ ] **Milestone 2 — real station**: run against a real Trydan (firmware
       1.6.x and 2.x), turn the answers (anonymized) into fixtures, check the
       points below.
@@ -94,7 +98,7 @@ up to date at the end of every milestone.
   kept in memory and in `/data` (`ids`, 16 at most, strict patterns when
   read back); a read without ID keeps that identity (no flip to the address
   id, no "not read any more"); another ID at that address is another station
-  and replaces it. The fresh read of a command uses the same rule.
+  and replaces it. Commands never use the kept ID (R1, below).
 - **ID format** (M7): letters and digits, lower case, up to 64 characters,
   never a "-" (the address ids have one); a whole JSON number is read as its
   digits.
@@ -186,6 +190,22 @@ up to date at the end of every milestone.
     through the address that answers).
   - M9: a second pause while one is being sent: "a pause is already being
     sent", not "another command is running".
+- **Approval fixes** (2026-10-19, round 2):
+  - R1: the ID kept for an address (M1) is for display only. A command on a
+    device keyed by ID needs that very ID in its fresh read: no ID →
+    refused unsent ("the station did not give its identifier"), another ID →
+    "another station". A device keyed by its address needs a read without
+    ID. `known()` prefers the address whose last read really gives the ID
+    (then online over offline); an address that really gives ID X removes X
+    from the kept IDs of the other addresses (memory and /data): after a
+    swap of addresses, device X follows X.
+  - R2: the DNS resolution of a command races the time left for the read
+    (`sendBy - commandMinSend - commandMinRead`); past it, refused "not
+    sent" within the 5 s of Gladys.
+  - R3: the pause sent again is the newest write of its kind and carries the
+    "applied?" check (reads 5 s and 20 s after it).
+  - R4: `/data` keeps the IDs of the configured addresses only (pruned at
+    each start).
 - **Pause first** (gladys-keba I1): never refused for a command in flight
   (the other kinds are refused at once while one runs); it goes at once; a
   command that arrived before it and has not written yet is refused unsent

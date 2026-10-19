@@ -53,7 +53,10 @@ publiée.
 
 L'appareil prend l'**identifiant** (`ID`) que la borne donne, gardé pour son
 adresse (aussi après un redémarrage) : une lecture qui ne le donne pas une
-fois ne change pas d'appareil. Certaines versions du logiciel de la borne
+fois ne change pas d'appareil. Mais une **commande** exige que la relecture
+donne vraiment cet identifiant : sinon elle est refusée sans être envoyée
+(« la borne n'a pas donné son identifiant »), pour ne jamais piloter une
+autre borne qui aurait pris l'adresse. Certaines versions du logiciel de la borne
 n'en donnent jamais : l'appareil prend alors l'adresse saisie, et changer
 cette adresse crée un nouvel appareil.
 

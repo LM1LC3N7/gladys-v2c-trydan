@@ -90,6 +90,7 @@ test/                             node --test, against the SDK's fake Gladys (in
   like resume on a fault or an unknown state. "Pause charging" is never held
   back (sent over a command in flight without a read, again after it unless
   a newer command reached the station; older unsent commands give way). The
-  identity of an address survives a read without ID (`/data`). "OK" means accepted, not
+  identity shown for an address survives a read without ID (`/data`), but a
+  command always needs the real ID of its device in the fresh read. "OK" means accepted, not
   applied. The energies stay plain sensors, never an `index`/`energy`
   feature.

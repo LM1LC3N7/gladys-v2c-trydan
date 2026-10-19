@@ -10,7 +10,10 @@ import { ERROR_KINDS, StationError } from '../../src/trydan/http.js';
 
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-/** st: { data, delays: { [path]: ms }, readDelay, serial, writeBody, applies, body() }. */
+/**
+ * st: { data, delays: { [path]: ms }, readDelay, serial, writeBody, applies,
+ * ignore: [paths answered "OK" but not applied], body() }.
+ */
 export function fakeNet(st) {
   const net = {
     st,
@@ -32,7 +35,7 @@ export function fakeNet(st) {
         }
         if (path.startsWith('/read/')) return { status: 404, headers: {}, body: 'Not found' };
         const [keyword, value] = path.slice('/write/'.length).split('=');
-        if (st.applies !== false) {
+        if (st.applies !== false && !st.ignore?.includes(path)) {
           st.data[keyword] = Number(value);
         }
         return { status: 200, headers: {}, body: st.writeBody ?? 'OK' };

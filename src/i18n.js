@@ -189,6 +189,10 @@ export const ERRORS = {
     'Another station answers at this address now: command refused, not sent.',
     'Une autre borne répond maintenant à cette adresse : commande refusée, non envoyée.',
   ),
+  noId: both(
+    'The station did not give its identifier: it cannot be told from another station at this address. Command refused, not sent.',
+    "La borne n'a pas donné son identifiant : impossible de la distinguer d'une autre borne à cette adresse. Commande refusée, non envoyée.",
+  ),
   badButton: both('A button only accepts the value 1.', "Un bouton n'accepte que la valeur 1."),
   badCurrent: both(
     'The charging current must be a whole number of amperes.',

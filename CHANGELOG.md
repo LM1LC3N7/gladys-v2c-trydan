@@ -44,6 +44,11 @@ the notes of the version's GitHub Release.
   command; numeric IDs up to 64 characters; a solar mode set while dynamic
   modulation is off is said in the status; docs of the modes and of a
   station typed twice.
+- Approval fixes: a command needs the station to give the ID of its device
+  in the read just before (else refused unsent); after a swap of addresses
+  the device follows its real ID; a slow DNS answer refuses the command in
+  time, unsent; a pause sent again that the station ignores is reported;
+  `/data` keeps the IDs of the configured addresses only.
 - "Test the connection" button; documentation in English and French;
   `LICENSE` and `THIRD_PARTY_NOTICES.md` (pytrydan, MIT) shipped in the image.
 

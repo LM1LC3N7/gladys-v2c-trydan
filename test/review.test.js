@@ -343,3 +343,141 @@ test('M6: a name that does not resolve to a unicast address refuses the command'
   assert.match(result.error, /non envoyée/);
   assert.deepEqual(server.writes(), []);
 });
+
+// --- Approval of c03a81c: A1-A4 inverted, and R4 -------------------------------
+
+/** Several stations by host; `at[host]` is the station object answering there. */
+function multiNet(at) {
+  const net = {
+    at,
+    log: [],
+    async transport({ host, path }) {
+      net.log.push({ host, path });
+      const st = net.at[host];
+      if (path === '/RealTimeData') {
+        return { status: 200, headers: {}, body: JSON.stringify(st.data) };
+      }
+      if (path.startsWith('/read/')) return { status: 404, headers: {}, body: '' };
+      const [k, v] = path.slice('/write/'.length).split('=');
+      st.data[k] = Number(v);
+      st.written = [...(st.written ?? []), path];
+      return { status: 200, headers: {}, body: 'OK' };
+    },
+  };
+  return net;
+}
+
+// A1 / R1 — an ID-less station now at the address of an ID device: shown on
+// that device (M1), but never driven from it.
+test('A1 / R1: a read without the ID of the device refuses every command', async (t) => {
+  const net = fakeNet({ data: realTime() });
+  const { advance, fire } = await setup(t, { net });
+  const other = realTime({ ChargeState: 1, Paused: 1, ChargePower: 0, MaxIntensity: 32 });
+  delete other.ID;
+  net.st.data = other;
+  await advance(30 * SECOND, 500);
+  for (const [role, value] of [
+    ['resume-charge', 1],
+    ['pause-charge', 1],
+    ['set-intensity', '10'],
+    ['set-solar-mode', 'stop'],
+  ]) {
+    const ack = fire(role, value);
+    await settle();
+    await advance(5 * SECOND, 100);
+    const r = await ack;
+    assert.equal(r.success, false, role);
+    assert.match(r.error, /n'a pas donné son identifiant.*non envoyée/);
+  }
+  assert.deepEqual(net.writes(), []);
+});
+
+// A2 / R1 — two stations swap their addresses: device X follows the address
+// that really gives X, and its commands go there.
+test('A2 / R1: address swap: device X follows the real ID', async (t) => {
+  const X = { data: realTime({ ChargePower: 2664, ChargeState: 1, Paused: 1 }) };
+  const noIdData = realTime({ ChargeState: 1, Paused: 1, ChargePower: 1111 });
+  delete noIdData.ID;
+  const Y = { data: noIdData };
+  const net = multiNet({ '192.168.1.60': X, '192.168.1.61': Y });
+  const config = { addresses: '192.168.1.60, 192.168.1.61', allow_commands: true };
+  const store = memoryStore();
+  const { gladys, advance, fire } = await setup(t, { config, net, store });
+  assert.equal(gladys.fake.lastState(`${DEVICE}:charge-power`), 2664);
+  net.at = { '192.168.1.60': Y, '192.168.1.61': X };
+  await advance(30 * SECOND, 500);
+  Y.data.ChargePower = 1112; // a value only the ID-less station has
+  await advance(30 * SECOND, 500);
+  assert.equal(gladys.fake.lastState(`${DEVICE}:charge-power`), 2664, 'device X shows station X');
+  assert.deepEqual({ ...store.data.ids }, { '192.168.1.61': ID }, 'X moved, .60 forgot it');
+  const resume = fire('resume-charge');
+  await settle();
+  await advance(5 * SECOND, 100);
+  assert.equal((await resume).success, true);
+  assert.deepEqual(X.written, ['/write/Paused=0'], 'the resume of device X went to station X');
+  assert.equal(Y.written, undefined);
+  // The ID-less station has its own device, keyed by its address now.
+  assert.ok(
+    gladys.fake.discoveredDevices.some(
+      (d) => d.external_id === 'ext:test-integration:trydan:ip-192-168-1-60',
+    ),
+  );
+});
+
+// A3 / R2 — a slow DNS resolution: refused unsent within the 5 s of Gladys.
+test('A3 / R2: a slow DNS resolution refuses the command in time, unsent', async (t) => {
+  const station = { data: realTime() };
+  const server = fakeStations({ 'trydan.lan': station, [HOST]: station });
+  const resolve = () => new Promise((done) => setTimeout(() => done(HOST), 8 * SECOND));
+  const { advance, fire } = await setup(t, {
+    config: { addresses: 'trydan.lan', allow_commands: true },
+    net: server,
+    resolve,
+  });
+  const start = Date.now();
+  let at;
+  const ack = fire('pause-charge').then((r) => {
+    at = Date.now() - start;
+    return r;
+  });
+  await settle();
+  await advance(10 * SECOND, 100);
+  const r = await ack;
+  assert.equal(r.success, false);
+  assert.match(r.error, /non envoyée/);
+  assert.ok(at < 4 * SECOND, `ack after ${at} ms`);
+  assert.deepEqual(server.writes(), []);
+});
+
+// A4 / R3 — the pause sent again carries the check: a pause the station
+// ignores is reported even when it overtook a command.
+test('A4 / R3: an overtaking pause the station ignores is reported', async (t) => {
+  const net = fakeNet({
+    data: pausedStation(),
+    delays: { '/write/Paused=0': 3000 },
+    ignore: ['/write/Paused=1'],
+  });
+  const { gladys, advance, fire } = await setup(t, { net });
+  const resume = fire('resume-charge');
+  await settle();
+  await advance(500);
+  const pause = fire('pause-charge');
+  await settle();
+  await advance(8 * SECOND);
+  await resume;
+  assert.equal((await pause).success, true);
+  await advance(40 * SECOND, 500);
+  assert.equal(net.st.data.Paused, 0, 'the pause never applied');
+  assert.match(
+    gladys.fake.connectionStatus.message.en,
+    /accepted the pause or resume without applying it/,
+  );
+});
+
+// R4 — the IDs kept in /data are those of the configured addresses only.
+test('R4: IDs of addresses no longer configured are dropped from /data', async (t) => {
+  const store = memoryStore({ ids: { '192.168.1.99': 'old1', [HOST]: ID } });
+  const net = fakeNet({ data: realTime() });
+  await setup(t, { config: { addresses: HOST }, net, store });
+  assert.deepEqual({ ...store.data.ids }, { [HOST]: ID });
+});

@@ -52,7 +52,9 @@ main meter). No daily consumption is published.
 
 The device takes the **identifier** (`ID`) the station gives, kept for its
 address (across restarts too): a read that misses it once does not change
-the device. Some firmware versions never give one: the device then takes
+the device. But a **command** needs the read just before to really give that
+identifier: otherwise it is refused unsent ("the station did not give its
+identifier"), so that another station that took the address is never driven. Some firmware versions never give one: the device then takes
 the address typed, and changing that address creates a new device.
 
 **The same station typed twice** (its IP address and its host name, for

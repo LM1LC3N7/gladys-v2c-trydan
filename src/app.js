@@ -128,6 +128,18 @@ export class TrydanApp {
     if (this.memory.pause) {
       this.pausedUntil = Math.max(this.pausedUntil, this.memory.pause.until);
     }
+    // The IDs kept are those of the configured addresses only (R4).
+    const keys = new Set(this.config.addresses.map((a) => addressKey(a)));
+    let pruned = false;
+    for (const key of Object.keys(this.memory.ids)) {
+      if (!keys.has(key)) {
+        delete this.memory.ids[key];
+        pruned = true;
+      }
+    }
+    if (pruned) {
+      await this.saveMemory();
+    }
     this.stations = new Map(
       this.config.addresses.map((address) => [
         addressKey(address),
@@ -360,20 +372,33 @@ export class TrydanApp {
     }
   }
 
-  /** A read answered: the station as read, and the guards it may lift. */
   /**
-   * The platform id of a read: its ID, else the ID last given at this
-   * address (M1: a read without ID never flips the identity), else the address.
+   * The platform id of a read, for display only: its ID, else the ID last
+   * given at this address (M1: a read without ID never flips the device
+   * shown), else the address. Commands never rely on it (R1, commandIdOk).
    */
   platformIdOf(station, snapshot) {
     return snapshot.id ?? station.knownId ?? addressId(station.address);
   }
 
+  /** A read answered: the station as read, and the guards it may lift. */
   applyRead(station, snapshot) {
-    if (snapshot.id && snapshot.id !== station.knownId) {
+    if (snapshot.id) {
+      let changed = snapshot.id !== station.knownId;
       station.knownId = snapshot.id;
       this.memory.ids[station.key] = snapshot.id;
-      this.saveMemory();
+      // This address really gives the ID: no other address keeps it (R1, a
+      // swap of addresses).
+      for (const other of this.stations.values()) {
+        if (other !== station && other.knownId === snapshot.id) {
+          other.knownId = undefined;
+          delete this.memory.ids[other.key];
+          changed = true;
+        }
+      }
+      if (changed) {
+        this.saveMemory();
+      }
     }
     snapshot.platformId = this.platformIdOf(station, snapshot);
     const id = snapshot.id ?? station.knownId;
@@ -519,11 +544,22 @@ export class TrydanApp {
         continue;
       }
       const held = byId.get(id);
-      if (!held || (held.online === false && station.online !== false)) {
+      if (!held || this.rank(station, id) > this.rank(held, id)) {
         byId.set(id, station);
       }
     }
     return byId;
+  }
+
+  /**
+   * Which address holds a platform id: one whose last read really gives that
+   * ID (R1) beats one that only kept it, and one online beats one offline.
+   */
+  rank(station, id) {
+    const real =
+      station.snapshot?.id === id ||
+      (station.snapshot?.id === undefined && id === addressId(station.address));
+    return (real ? 2 : 0) + (station.online !== false ? 1 : 0);
   }
 
   /**
@@ -922,11 +958,19 @@ export class TrydanApp {
     const station = this.stationOf(id);
     // One DNS resolution per command: the read and the write go to the
     // same address (M6).
+    // Raced against the time left for the read (R2): a slow DNS answer
+    // refuses the command unsent, within the 5 s of Gladys.
     let address;
     try {
-      address = await this.addressOf(station.address);
+      address = await this.within(
+        this.addressOf(station.address),
+        sendBy - TIMINGS.commandMinSend - TIMINGS.commandMinRead - this.now(),
+      );
     } catch {
       throw this.refusal(ERRORS.notSent('unreachable'));
+    }
+    if (address === undefined) {
+      throw this.refusal(ERRORS.notSent('dns timeout'));
     }
     entry.address = address;
     if (generation !== this.generation) {
@@ -961,9 +1005,7 @@ export class TrydanApp {
       if (generation !== this.generation) {
         throw this.refusal(ERRORS.unknownStation);
       }
-      if (this.platformIdOf(station, fresh) !== id) {
-        throw this.refusal(ERRORS.otherStation);
-      }
+      this.checkIdentity(station, fresh, id);
       this.applyRead(station, fresh);
       // Shown in the background: the ack never waits for Gladys.
       this.publishAll().catch((err) => this.logger.warn(`Publishing failed: ${err.message}`));
@@ -1049,6 +1091,36 @@ export class TrydanApp {
     this.pauseAgain(station, id, entry, plan);
   }
 
+  /** `promise`'s value if it settles within `ms`, else undefined (it goes on). */
+  within(promise, ms) {
+    let handle;
+    const timeout = new Promise((resolve) => {
+      handle = this.timers.setTimeout(() => resolve(undefined), Math.max(0, ms));
+    });
+    return Promise.race([promise, timeout]).finally(() => this.timers.clearTimeout(handle));
+  }
+
+  /**
+   * The fresh read of a command must be the station of the device (R1): a
+   * device keyed by ID needs that very ID in the read (never the ID kept for
+   * the address); a device keyed by its address needs a read without ID at
+   * that address. Throws a refusal, nothing sent.
+   */
+  checkIdentity(station, fresh, id) {
+    if (id === addressId(station.address)) {
+      if (fresh.id !== undefined) {
+        throw this.refusal(ERRORS.otherStation);
+      }
+      return;
+    }
+    if (fresh.id === undefined) {
+      throw this.refusal(ERRORS.noId);
+    }
+    if (fresh.id !== id) {
+      throw this.refusal(ERRORS.otherStation);
+    }
+  }
+
   /** The address to talk to for one command: a host name resolved once (M6). */
   async addressOf({ host, port }) {
     return isIP(host) ? { host, port } : { host: await this.resolve(host), port };
@@ -1106,12 +1178,14 @@ export class TrydanApp {
           return;
         }
         this.logger.warn(`Trydan ${station.key}: pause sent again after the command in flight`);
-        this.countWrite(id, 'paused');
+        // The newest write of its kind: it carries the "applied?" check (R3).
+        const write = this.countWrite(id, 'paused');
         await this.client.write(entry.address, 'Paused', 1, {
           startBy: Infinity,
           timeoutMs: TIMINGS.readTimeout,
         });
         this.guard(id, plan);
+        this.followUp(station, { id, kind: 'paused', expected: 1, write });
       })
       .catch(async (err) => {
         this.logger.warn(`Trydan ${station.key}: pause again failed (${errorReason(err)})`);
