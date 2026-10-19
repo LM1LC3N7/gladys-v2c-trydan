@@ -1,67 +1,133 @@
-# Template de démonstration
+# V2C Trydan pour Gladys
 
-Ceci est la documentation utilisateur de l'intégration. Gladys ré-héberge ce
-fichier et affiche un lien **Documentation** permanent vers lui dans l'écran
-de configuration (dans la langue de l'utilisateur, avec l'anglais en repli) —
-c'est au moment de configurer que l'utilisateur en a le plus besoin. Gardez
-les courtes indications d'accueil dans les blocs `section` du `config_schema`
-du manifest ; mettez ici le pas-à-pas détaillé (captures d'écran, dépannage…).
+Affiche votre borne de recharge **V2C Trydan** dans Gladys, par son **API
+locale** : sans cloud, sans compte, directement sur votre réseau.
+
+> **API non officielle, module jamais testé avec une vraie borne.**
+> Sans lien avec V2C. Il parle à l'API locale de la borne comme la
+> bibliothèque pytrydan (utilisée par Home Assistant). V2C peut la changer
+> sans prévenir.
 
 ## Ce que vous obtenez
 
-Six appareils de démonstration apparaissent après l'installation : une
-station météo (vraies données Open-Meteo), un interrupteur, une lampe
-variable, une prise connectée avec mesure de puissance, un détecteur de
-mouvement et une caméra.
+Un appareil par borne avec :
 
-## Configuration
+| Fonctionnalité                                                                                      | Contenu                                                                                                |
+| --------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------ |
+| État                                                                                                | Aucun véhicule, branché, en charge, en pause, borne verrouillée, défauts                               |
+| Connecteur                                                                                          | Libre, occupé, en défaut ou indisponible (catégorie « borne de recharge » de Gladys)                   |
+| État de charge                                                                                      | En charge, véhicule branché, en pause (par la borne), inactif                                          |
+| Véhicule branché                                                                                    | Oui / non                                                                                              |
+| Puissance de charge                                                                                 | En W                                                                                                   |
+| Puissances maison, solaire, batt.                                                                   | En W, mesurées par la pince ou l'onduleur relié à la borne (maison négative à l'injection)             |
+| Tension de l'installation                                                                           | En V, si la borne la donne                                                                             |
+| Énergie de la session                                                                               | En kWh, un simple capteur                                                                              |
+| Durée de la session                                                                                 | En secondes                                                                                            |
+| Courant de charge, minimal, max.                                                                    | En A : la consigne actuelle et la plage réglée sur la borne                                            |
+| Charge en pause, borne verrouillée, programmation, modulation dynamique, modulation en pause, prête | Oui / non, en lecture seule                                                                            |
+| Câblage (phases)                                                                                    | Monophasé, triphasé, mixte (lecture seule)                                                             |
+| Mode de pilotage solaire                                                                            | Programmation, sans programmation, solaire + puissance minimale, solaire seul, solaire + réseau, arrêt |
+| Liaison du compteur                                                                                 | Sans erreur, pince non branchée, erreurs Modbus…                                                       |
+| Mettre la charge en pause                                                                           | Bouton (commandes autorisées seulement)                                                                |
+| Reprendre la charge                                                                                 | Bouton (commandes autorisées seulement)                                                                |
+| Régler le courant de charge                                                                         | Liste de 6 à 32 A (commandes autorisées seulement)                                                     |
+| Régler le pilotage solaire                                                                          | Liste des six modes (commandes autorisées seulement)                                                   |
 
-1. Ouvrez l'onglet **Configuration** de l'intégration.
-2. Renseignez la **latitude** et la **longitude** que la station météo de
-   démonstration doit observer (Paris par défaut), et choisissez votre unité
-   de température. L'**intervalle de rafraîchissement** règle la fréquence
-   de lecture de la station météo et de la puissance de la prise : toutes
-   les 5 minutes par défaut, toutes les minutes au plus.
-3. Enregistrez : les appareils apparaissent dans l'onglet **Découverte**,
-   prêts à être ajoutés.
+Lecture toutes les 30 secondes par défaut (de 10 s à 10 min, réglable).
 
-Le réglage **Préférer la connexion locale** pilote la prise de
-démonstration : elle affiche en badge le canal réellement utilisé (local ou
-cloud), avec un point orange quand elle fonctionne en mode dégradé (local
-refusé, bascule cloud).
+**Énergie** : l'énergie de la session est un **simple capteur**, jamais un
+index : elle n'entre pas dans l'onglet Énergie de Gladys (la borne est déjà
+comptée par votre compteur principal). Aucune consommation journalière n'est
+publiée.
 
-## Actions
+## Installation
 
-- **Tester le fournisseur météo** — effectue une requête en direct vers
-  Open-Meteo et affiche la température et l'humidité actuelles sous le
-  bouton.
-- **Identifier un appareil** — choisissez un de vos appareils dans la liste
-  et il se signale (la lampe de démonstration « clignote » dans les logs).
+1. Donnez à la borne une **adresse IP fixe** dans votre box ou routeur.
+2. Installez l'intégration depuis le store de Gladys.
+3. Dans sa configuration, saisissez l'**adresse IP de la borne** (ou son nom
+   d'hôte ; plusieurs bornes : séparées par des virgules, quatre au plus).
+   Les adresses de bouclage (127.x), de multidiffusion et de diffusion
+   (finissant par .255) sont refusées, et un nom d'hôte n'est suivi que s'il
+   désigne une adresse IPv4 d'appareil.
+4. Enregistrez, puis ajoutez la borne depuis l'onglet **Découverte**.
 
-## Scènes
+L'appareil prend l'**identifiant** (`ID`) que la borne donne. Certaines
+versions du logiciel de la borne n'en donnent pas : l'appareil prend alors
+l'adresse saisie, et changer cette adresse crée un nouvel appareil.
 
-L'intégration ajoute ses propres cartes à l'éditeur de scènes (Gladys 5.1
-ou plus récent), dans la catégorie **Intégrations** :
+Le bouton **Tester la connexion** lit chaque borne une fois (au plus toutes
+les 10 secondes).
 
-- **Mouvement détecté** (déclencheur) — lance la scène quand un détecteur
-  de démonstration voit bouger quelque chose. Choisissez éventuellement le
-  détecteur et ce qui a bougé (personne, animal) ; laissés vides, toute
-  détection correspond. Les actions suivantes peuvent lire ce qui a bougé
-  avec `{{triggerEvent.data.target}}`.
-- **Identifier un appareil** (action) — fait se signaler l'appareil choisi.
-  Elle indique si l'appareil a pu se signaler, pour que les actions
-  suivantes puissent en dépendre.
+## Sécurité : une API sans mot de passe
 
-## Tableau de bord
+L'API locale de la Trydan **n'a aucune authentification** : toute machine
+de votre réseau peut lire la borne et la piloter (pause, courant, mode),
+Gladys comprise. Ce module suppose un **réseau de confiance** : ne rendez
+jamais la borne joignable depuis Internet (pas de redirection de port), et
+mettez-la de préférence sur un réseau séparé pour les objets connectés.
+Aucun secret n'est demandé ni gardé par ce module.
 
-Ajoutez le widget **État de la démo** à un tableau de bord : il affiche en
-direct la température de la station météo et la puissance de la prise du
-bureau, la connexion utilisée par la prise (en orange si dégradée) et la
-position observée. Son bouton **Identifier la lampe** fait se signaler la
-lampe de démonstration.
+## Commandes (désactivées par défaut)
 
-## Dépannage
+« Mettre la charge en pause », « Reprendre la charge », « Régler le courant
+de charge » et « Régler le pilotage solaire » refusent toute commande tant
+que l'option **Autoriser les commandes** est désactivée. Activée :
 
-L'intégration journalise tout ce qu'elle fait : consultez les logs de
-l'intégration depuis l'interface Gladys (ou `docker logs` sur l'hôte) avec
-`LOG_LEVEL=debug` pour le détail complet.
+- **Pause** suspend la charge (`Paused=1`) ; elle n'est **jamais bloquée** :
+  ni par une commande en cours (elle part tout de suite, et une seconde fois
+  quand cette commande se termine), ni par la limite du courant. Une
+  commande plus ancienne pas encore partie s'efface devant elle ;
+- **Reprendre** relance la charge (`Paused=0`) ; refusé si la borne signale
+  un défaut ou un état inconnu ;
+- **Courant de charge** : en ampères entiers, de 6 à 32 A, et **toujours
+  dans la plage réglée sur la borne** (courant minimal et maximal relus juste
+  avant) ; refusé si la borne ne donne pas cette plage. **Un changement par
+  minute au plus** : ce n'est pas fait pour une régulation fine ;
+- **Pilotage solaire** : le mode de puissance dynamique de la borne
+  (programmation, solaire + minimum, solaire seul, solaire + réseau, arrêt…).
+  Il n'agit que si la **modulation dynamique** est activée sur la borne (dans
+  l'application V2C).
+
+Ni le verrouillage, ni le câblage (phases), ni la plage de courant, ni la
+programmation, ni la puissance contractuelle ne se changent depuis Gladys.
+
+Ce sont des **boutons** et des **listes**, jamais des interrupteurs : un
+« éteins tout » (depuis Gladys, Google Home, Alexa ou HomeKit) ne les touche
+pas. Une scène peut les déclencher, mais seulement par une action
+explicite, et seulement si les commandes sont autorisées. Attention : le
+chat IA de Gladys (MCP) peut créer et lancer une telle scène : tant que les
+commandes sont autorisées, il peut reprendre la charge ou changer le courant.
+
+Avant chaque commande, l'intégration **relit la borne** et décide sur cette
+lecture seule ; l'option est revérifiée juste avant l'envoi. Une commande
+inutile (déjà dans cet état) n'est pas envoyée. Une commande qui ne peut pas
+partir dans les 3,5 secondes est refusée sans être envoyée. Si la borne ne
+confirme pas (silence, erreur 5xx), Gladys affiche « Commande envoyée, sans
+confirmation » : vérifiez l'état, relu 5 puis 20 secondes plus tard. La
+borne répond « OK » quand elle **accepte** un réglage ; si la relecture
+montre qu'elle ne l'a pas appliqué (pilotage solaire, programmation…),
+l'écran de configuration le signale. Une commande à la fois par borne, la
+pause mise à part.
+
+## Erreurs et limites
+
+- **Borne injoignable** : seuls le connecteur (« indisponible ») et l'état
+  (« Borne injoignable ») changent ; les autres valeurs gardent leur dernière
+  valeur. Une borne retirée de la configuration, ou qui n'a jamais répondu
+  depuis le démarrage, s'affiche de même, et l'écran de configuration la
+  nomme. Nouvel essai après 30 s, 1, 2 puis 5 minutes, jamais plus vite que
+  l'intervalle.
+- **429 (trop de requêtes)**, peu probable sur une borne locale : pause de
+  1 minute à 6 heures pour tout (lectures, bouton, commandes), jamais plus
+  courte que l'intervalle de rafraîchissement, gardée dans `/data` après un
+  redémarrage.
+- Le **câblage** (`ChargeMode`) manque dans la lecture principale de
+  certaines versions : il est alors lu à part, une fois par heure au plus.
+- Le courant mesuré n'est pas donné par la borne : « Courant de charge » est
+  la consigne.
+- Les journaux ne contiennent jamais le texte des réponses de la borne.
+
+## Crédits
+
+Portage de [pytrydan](https://github.com/dgomes/pytrydan) (Diogo Gomes, MIT,
+version 1.0.6). Licence Apache-2.0.

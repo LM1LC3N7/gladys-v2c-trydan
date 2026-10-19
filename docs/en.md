@@ -1,61 +1,127 @@
-# Demo Devices Template
+# V2C Trydan for Gladys
 
-This is the user documentation of the integration. Gladys re-hosts this file
-and shows a permanent **Documentation** link to it in the Configuration screen
-(in the user's language, with English as the fallback) — it is when
-configuring that the user needs it most. Keep the short onboarding hints in
-the `section` blocks of the manifest `config_schema`; put the long
-step-by-step (screenshots, troubleshooting…) here.
+Shows your **V2C Trydan** charging station in Gladys through its **local
+API**: no cloud, no account, straight on your network.
+
+> **Unofficial API, never tested with a real station.**
+> Not affiliated with V2C. It talks to the local API of the station as the
+> pytrydan library (used by Home Assistant) does. V2C may change it without
+> notice.
 
 ## What you get
 
-Six demo devices show up after installation: a weather station (real data
-from Open-Meteo), a switch, a dimmable light, a smart plug with power
-metering, a motion sensor and a camera.
+One device per station with:
 
-## Configuration
+| Feature                                                                                  | Content                                                                                  |
+| ---------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------- |
+| Status                                                                                   | No vehicle, plugged in, charging, paused, station locked, faults                         |
+| Connector                                                                                | Available, occupied, faulted or unavailable (Gladys' "charging station" category)        |
+| Charging state                                                                           | Charging, vehicle plugged in, paused (by the station), idle                              |
+| Vehicle plugged in                                                                       | Yes / no                                                                                 |
+| Charging power                                                                           | In W                                                                                     |
+| House, solar, battery power                                                              | In W, measured by the clamp or inverter linked to the station (house negative on export) |
+| Installation voltage                                                                     | In V, when the station gives it                                                          |
+| Energy of the session                                                                    | In kWh, a plain sensor                                                                   |
+| Duration of the session                                                                  | In seconds                                                                               |
+| Charging, minimum, maximum current                                                       | In A: the current setpoint and the range set on the station                              |
+| Charge paused, station locked, schedule on, dynamic modulation, modulation paused, ready | Yes / no, read only                                                                      |
+| Wiring (phases)                                                                          | Single-phase, three-phase, mixed (read only)                                             |
+| Solar control mode                                                                       | Schedule, no schedule, solar + minimum power, solar only, solar + grid, stop             |
+| Meter link                                                                               | No error, clamp not connected, Modbus errors…                                            |
+| Pause charging                                                                           | Button (commands allowed only)                                                           |
+| Resume charging                                                                          | Button (commands allowed only)                                                           |
+| Set the charging current                                                                 | List of 6 to 32 A (commands allowed only)                                                |
+| Set the solar control mode                                                               | List of the six modes (commands allowed only)                                            |
 
-1. Open the **Configuration** tab of the integration.
-2. Set the **latitude** and **longitude** the demo weather station should
-   observe (they default to Paris), and pick your temperature unit.
-   The **refresh interval** sets how often the weather station and the
-   plug's power are read: every 5 minutes by default, every minute at most.
-3. Save: the devices appear in the **Discovery** tab, ready to be added.
+Read every 30 seconds by default (10 s to 10 min, configurable).
 
-The **Prefer the local connection** toggle drives the demo plug: it reports
-the channel it actually uses as a badge (local or cloud), with an orange dot
-when it runs degraded (local refused, cloud fallback).
+**Energy**: the energy of the session is a **plain sensor**, never an index:
+it does not enter Gladys' Energy tab (the station is already counted by your
+main meter). No daily consumption is published.
 
-## Actions
+## Installation
 
-- **Test the weather provider** — performs a live request to Open-Meteo and
-  shows the current temperature and humidity under the button.
-- **Identify a device** — pick one of your devices in the list and it will
-  signal itself (the demo light "blinks" in the logs).
+1. Give the station a **fixed IP address** in your router.
+2. Install the integration from the Gladys store.
+3. In its configuration, enter the **IP address of the station** (or its
+   host name; several stations: separated by commas, four at most).
+   Loopback (127.x), multicast and broadcast (ending in .255) addresses are
+   refused, and a host name is only followed when it points to an IPv4
+   device address.
+4. Save, then add the station from the **Discovery** tab.
 
-## Scenes
+The device takes the **identifier** (`ID`) the station gives. Some firmware
+versions give none: the device then takes the address typed, and changing
+that address creates a new device.
 
-The integration adds its own cards to the scene editor (Gladys 5.1 or
-later), under the **Integrations** category:
+The **Test the connection** button reads each station once (at most every
+10 seconds).
 
-- **Motion detected** (trigger) — starts the scene when a demo motion sensor
-  sees something move. Optionally pick the sensor and what moved (person,
-  animal); left empty, any detection matches. The following actions can
-  read what moved with `{{triggerEvent.data.target}}`.
-- **Identify a device** (action) — makes the chosen device signal itself.
-  It returns whether the device could signal itself, so the following
-  actions can depend on it.
+## Security: an API without a password
 
-## Dashboard
+The local API of the Trydan has **no authentication at all**: any machine
+on your network can read the station and drive it (pause, current, mode),
+Gladys included. This module assumes a **trusted network**: never make the
+station reachable from the Internet (no port forwarding), and preferably put
+it on a separate network for connected devices. This module asks for and
+keeps no secret.
 
-Add the **Demo status** widget to a dashboard: it shows the live
-temperature of the weather station and the power of the office plug, the
-connection the plug currently uses (orange when degraded) and the observed
-location. Its **Identify the light** button makes the demo light signal
-itself.
+## Commands (off by default)
 
-## Troubleshooting
+"Pause charging", "Resume charging", "Set the charging current" and "Set the
+solar control mode" refuse every command while the **Allow the commands**
+option is off. On:
 
-The integration logs everything it does: check the integration logs from the
-Gladys UI (or `docker logs` on the host) with `LOG_LEVEL=debug` for the full
-detail.
+- **Pause** suspends the charge (`Paused=1`); it is **never blocked**: not by
+  a command in flight (it leaves at once, and once more when that command
+  ends), not by the current limit. An older command that has not left yet
+  gives way to it;
+- **Resume** restarts the charge (`Paused=0`); refused when the station
+  reports a fault or an unknown state;
+- **Charging current**: whole amperes, 6 to 32 A, and **always within the
+  range set on the station** (minimum and maximum current read just before);
+  refused when the station does not give that range. **One change a minute
+  at most**: not meant for fine regulation;
+- **Solar control**: the dynamic power mode of the station (schedule,
+  solar + minimum, solar only, solar + grid, stop…). It only acts when
+  **dynamic modulation** is on in the station (in the V2C app).
+
+Neither the lock, the wiring (phases), the current range, the schedule nor
+the contracted power can be changed from Gladys.
+
+They are **buttons** and **lists**, never switches: a "turn everything off"
+(from Gladys, Google Home, Alexa or HomeKit) does not touch them. A scene
+can trigger them, but only through an explicit action, and only when the
+commands are allowed. Beware: Gladys' AI chat (MCP) can create and run such
+a scene: while the commands are allowed, it can resume the charge or change
+the current.
+
+Before each command, the integration **reads the station again** and
+decides on that read only; the option is checked again right before
+sending. A useless command (already so) is not sent. A command that cannot
+leave within 3.5 seconds is refused unsent. When the station does not
+confirm (silence, a 5xx error), Gladys shows "Command sent, without
+confirmation": check the state, read again 5 then 20 seconds later. The
+station answers "OK" when it **accepts** a setting; when the read after
+shows it did not apply it (solar control, schedule…), the configuration
+screen says so. One command at a time per station, the pause aside.
+
+## Errors and limits
+
+- **Station unreachable**: only the connector ("unavailable") and the status
+  ("Station unreachable") change; the other values keep their last value. A
+  station removed from the configuration, or that never answered since the
+  start, shows the same, and the configuration screen names it. New tries
+  after 30 s, 1, 2 then 5 minutes, never faster than the interval.
+- **429 (too many requests)**, unlikely from a local station: a pause of
+  1 minute to 6 hours for everything (reads, button, commands), never
+  shorter than the refresh interval, kept in `/data` across a restart.
+- The **wiring** (`ChargeMode`) is missing from the main read of some
+  firmware versions: it is then read alone, at most once an hour.
+- The station gives no measured current: "Charging current" is the setpoint.
+- The logs never contain the text of the answers of the station.
+
+## Credits
+
+Ported from [pytrydan](https://github.com/dgomes/pytrydan) (Diogo Gomes,
+MIT, version 1.0.6). Apache-2.0 license.

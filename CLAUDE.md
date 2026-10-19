@@ -16,8 +16,8 @@ its only runtime dependency. It started from the official JavaScript template.
 ```bash
 npm install
 npm test                                  # node --test, the built-in runner
-node --test test/devices.test.js          # one file
-node --test --test-name-pattern "plug"    # tests whose name matches
+node --test test/app.test.js              # one file
+node --test --test-name-pattern "pause"   # tests whose name matches
 npm run lint                              # ESLint
 npm run format:check                      # Prettier, as the CI runs it
 npm run format                            # Prettier, fix in place
@@ -32,12 +32,16 @@ pushing.
 
 ```
 index.js                          SDK wiring only: handlers registered before connect()
-src/devices/index.js              registry of the device blueprints + dispatch helpers
-src/devices/<type>.js             one device type per file (buildDevice, onPoll, onSetValue...)
-src/scenes.js                     scene action handlers (manifest `scene_actions`)
-src/widgets.js                    dashboard widget handlers (manifest `widgets`)
+src/handlers.js                   SDK handlers -> TrydanApp (shared with the tests)
+src/app.js                        stations, polling, devices, states, status, commands
+src/devices.js                    device and states of a station (pure); feature roles are frozen
+src/trydan/client.js              RealTimeData, ChargeMode, writes, parsing (own fields, exact types)
+src/trydan/http.js                the only network access: node:http GET, bounded, unicast lookup
+src/publisher.js                  states to Gladys within 300 per minute
+src/store.js                      /data/trydan-state.json (the 429 pause)
 src/config.js                     DEFAULT_CONFIG (mirrors the manifest defaults) + normalization
-src/weather.js                    example driver (Open-Meteo)
+src/i18n.js                       English and French runtime texts
+scripts/cover.mjs                 cover.png generator (plain Node, no dependency)
 gladys-assistant-integration.json manifest: name, config_schema, actions, image...
 docs/en.md, docs/fr.md            user documentation, re-hosted by Gladys (mandatory)
 test/                             node --test, against the SDK's fake Gladys (integration-sdk/testing)
@@ -74,3 +78,15 @@ test/                             node --test, against the SDK's fake Gladys (in
   manifest texts, and `docs/en.md` / `docs/fr.md`, kept in sync.
 - **Style.** Prettier formats, ESLint catches mistakes. Comments explain why,
   in English. Tests never touch the network.
+- **V2C Trydan.** The local API has no authentication: never add a feature
+  that writes more than `Paused`, `Intensity` and `DynamicPowerMode`
+  (`WRITABLE`) without a decision in TODO.md. Addresses stay unicast IPv4
+  (literals checked by the config, names by the `lookup` of
+  `src/trydan/http.js`). Commands stay behind `allow_commands` (off by
+  default), are decided on a fresh RealTimeData, are checked again right
+  before the write, never use a switch; the current stays within
+  `MinIntensity`..`MaxIntensity` read then, one change a minute per station.
+  "Pause charging" is never held back (sent over a command in flight, again
+  after it, older unsent commands give way). "OK" means accepted, not
+  applied. The energies stay plain sensors, never an `index`/`energy`
+  feature.
