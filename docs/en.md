@@ -50,9 +50,16 @@ main meter). No daily consumption is published.
    device address.
 4. Save, then add the station from the **Discovery** tab.
 
-The device takes the **identifier** (`ID`) the station gives. Some firmware
-versions give none: the device then takes the address typed, and changing
-that address creates a new device.
+The device takes the **identifier** (`ID`) the station gives, kept for its
+address (across restarts too): a read that misses it once does not change
+the device. Some firmware versions never give one: the device then takes
+the address typed, and changing that address creates a new device.
+
+**The same station typed twice** (its IP address and its host name, for
+instance): it gives the same identifier, so a single device; it is read
+twice per interval, and the commands go through the address that answers
+(the first one typed when both do). Type it once. Without an identifier,
+each address gives its own device.
 
 The **Test the connection** button reads each station once (at most every
 10 seconds).
@@ -73,18 +80,44 @@ solar control mode" refuse every command while the **Allow the commands**
 option is off. On:
 
 - **Pause** suspends the charge (`Paused=1`); it is **never blocked**: not by
-  a command in flight (it leaves at once, and once more when that command
-  ends), not by the current limit. An older command that has not left yet
-  gives way to it;
+  a command in flight (it leaves at once, without a read, and once more when
+  that command ends), not by a once-a-minute limit. An older command that
+  has not left yet gives way to it. A second pause while the first one is
+  being sent is refused ("a pause is already being sent");
 - **Resume** restarts the charge (`Paused=0`); refused when the station
   reports a fault or an unknown state;
 - **Charging current**: whole amperes, 6 to 32 A, and **always within the
   range set on the station** (minimum and maximum current read just before);
-  refused when the station does not give that range. **One change a minute
-  at most**: not meant for fine regulation;
-- **Solar control**: the dynamic power mode of the station (schedule,
-  solar + minimum, solar only, solar + grid, stop…). It only acts when
-  **dynamic modulation** is on in the station (in the V2C app).
+  refused when the station does not give that range;
+- **Solar control**: the dynamic power mode of the station (see below). Any
+  mode but "Stop" may take power and so **start a charge**: like "Resume", it
+  is refused when the station reports a fault or an unknown state.
+
+**One change a minute at most** per station for the current, the solar
+control and resume (not meant for fine regulation); never for the pause.
+
+### The solar control modes
+
+What pytrydan says of each value (`DynamicPowerMode`); the exact effect
+depends on the station and its installation (not checked):
+
+- **Schedule (app or V2C cloud)**: the station follows the time profile set
+  in the V2C app; it may charge **from the grid**;
+- **No schedule**: the time profile is off; the station charges from the
+  grid at the current setpoint;
+- **Solar + minimum power**: the solar surplus, plus a minimum power **taken
+  from the grid**;
+- **Solar only**: the solar surplus only;
+- **Solar + grid**: the solar surplus, topped up **from the grid**;
+- **Stop**: the "stop" mode of the station, which takes no power; it is not
+  the same as "Pause charging" (`Paused`): to suspend a charge, use the
+  pause.
+
+The solar modes only act when **dynamic modulation** is on in the station
+(in the V2C app): with "Dynamic modulation" at no, a mode change is accepted
+but has no effect, and the configuration screen says so. With dynamic
+modulation, the station sets its current itself: the "charging current" sent
+from Gladys is **not a ceiling** and may be replaced by the station.
 
 Neither the lock, the wiring (phases), the current range, the schedule nor
 the contracted power can be changed from Gladys.
@@ -100,7 +133,7 @@ Before each command, the integration **reads the station again** and
 decides on that read only; the option is checked again right before
 sending. A useless command (already so) is not sent. A command that cannot
 leave within 3.5 seconds is refused unsent. When the station does not
-confirm (silence, a 5xx error), Gladys shows "Command sent, without
+confirm (silence, a 5xx error, an answer other than "OK"), Gladys shows "Command sent, without
 confirmation": check the state, read again 5 then 20 seconds later. The
 station answers "OK" when it **accepts** a setting; when the read after
 shows it did not apply it (solar control, schedule…), the configuration

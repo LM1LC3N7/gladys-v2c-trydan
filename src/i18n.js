@@ -159,6 +159,11 @@ export const T = {
       `${name} accepted ${kinds.en} without applying it (solar control, schedule or setting of the station?).`,
       `${name} a accepté ${kinds.fr} sans l'appliquer (pilotage solaire, programmation ou réglage de la borne ?).`,
     ),
+  dynamicOff: (name) =>
+    both(
+      `${name}: a solar mode was set while dynamic modulation is off: it has no effect until it is turned on (V2C app).`,
+      `${name} : un mode solaire a été réglé alors que la modulation dynamique est désactivée : sans effet tant qu'elle n'est pas activée (application V2C).`,
+    ),
   kinds: {
     paused: both('the pause or resume', 'la pause ou la reprise'),
     intensity: both('the charging current', 'le courant de charge'),
@@ -202,10 +207,10 @@ export const ERRORS = {
     'The station did not give a valid minimum and maximum current: command refused, not sent.',
     "La borne n'a pas donné de courant minimal et maximal valables : commande refusée, non envoyée.",
   ),
-  intensityTooOften: (wait) =>
+  tooOften: (wait) =>
     both(
-      `One change of the charging current a minute at most: try again in ${wait.en}. "Pause charging" stays available. Not sent.`,
-      `Un changement du courant de charge par minute au plus : réessayez dans ${wait.fr}. « Mettre la charge en pause » reste disponible. Non envoyé.`,
+      `One change a minute at most for this command: try again in ${wait.en}. "Pause charging" stays available. Not sent.`,
+      `Un changement par minute au plus pour cette commande : réessayez dans ${wait.fr}. « Mettre la charge en pause » reste disponible. Non envoyée.`,
     ),
   paused: (wait) =>
     both(
@@ -215,6 +220,10 @@ export const ERRORS = {
   stillRunning: both(
     'Another command of this station is still running: not sent.',
     'Une autre commande de cette borne est encore en cours : non envoyée.',
+  ),
+  pauseRunning: both(
+    'A pause of this station is already being sent: not sent twice.',
+    "Une pause de cette borne est déjà en cours d'envoi : pas envoyée deux fois.",
   ),
   pauseMeanwhile: both(
     'A pause of this station arrived meanwhile: this command is not sent.',
@@ -235,12 +244,12 @@ export const ERRORS = {
   ),
   fault: (status) =>
     both(
-      `The station reports "${status.en}": charging is not resumed. Not sent.`,
-      `La borne signale « ${status.fr} » : la charge n'est pas reprise. Non envoyée.`,
+      `The station reports "${status.en}": nothing that may start a charge is sent. Not sent.`,
+      `La borne signale « ${status.fr} » : rien qui puisse démarrer une charge n'est envoyé. Non envoyée.`,
     ),
   unknownStatus: both(
-    'The state of the station is unknown: charging is not resumed. Not sent.',
-    "L'état de la borne est inconnu : la charge n'est pas reprise. Non envoyée.",
+    'The state of the station is unknown: nothing that may start a charge is sent. Not sent.',
+    "L'état de la borne est inconnu : rien qui puisse démarrer une charge n'est envoyé. Non envoyée.",
   ),
   notSent: (reason) =>
     both(

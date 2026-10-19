@@ -50,7 +50,8 @@ Changed: a missing or mistyped value is unknown (never a default), and a
 command that needs it is refused; only `ChargeMode` is read alone, at most
 once an hour; the station is read again right before each command, and the
 command decided on that read only; the charging current is also bounded by
-`MinIntensity` and `MaxIntensity` read then, one change a minute at most;
+`MinIntensity` and `MaxIntensity` read then, and the current, the solar
+mode and resume are held to one change a minute;
 only `Paused`, `Intensity` and `DynamicPowerMode` are ever written (never
 `Locked`, `ChargeMode`, `MinIntensity`, `MaxIntensity`, `Dynamic`, `Timer`,
 `ContractedPower`, `VoltageInstallation` or the LEDs); reads are not retried

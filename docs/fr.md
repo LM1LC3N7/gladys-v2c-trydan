@@ -51,9 +51,17 @@ publiée.
    désigne une adresse IPv4 d'appareil.
 4. Enregistrez, puis ajoutez la borne depuis l'onglet **Découverte**.
 
-L'appareil prend l'**identifiant** (`ID`) que la borne donne. Certaines
-versions du logiciel de la borne n'en donnent pas : l'appareil prend alors
-l'adresse saisie, et changer cette adresse crée un nouvel appareil.
+L'appareil prend l'**identifiant** (`ID`) que la borne donne, gardé pour son
+adresse (aussi après un redémarrage) : une lecture qui ne le donne pas une
+fois ne change pas d'appareil. Certaines versions du logiciel de la borne
+n'en donnent jamais : l'appareil prend alors l'adresse saisie, et changer
+cette adresse crée un nouvel appareil.
+
+**Une même borne saisie deux fois** (par exemple son adresse IP et son nom
+d'hôte) : elle donne le même identifiant, donc un seul appareil ; elle est
+lue deux fois par intervalle, et les commandes passent par l'adresse qui
+répond (la première saisie si les deux répondent). Saisissez-la une seule
+fois. Sans identifiant, chaque adresse donne son propre appareil.
 
 Le bouton **Tester la connexion** lit chaque borne une fois (au plus toutes
 les 10 secondes).
@@ -74,19 +82,48 @@ de charge » et « Régler le pilotage solaire » refusent toute commande tant
 que l'option **Autoriser les commandes** est désactivée. Activée :
 
 - **Pause** suspend la charge (`Paused=1`) ; elle n'est **jamais bloquée** :
-  ni par une commande en cours (elle part tout de suite, et une seconde fois
-  quand cette commande se termine), ni par la limite du courant. Une
-  commande plus ancienne pas encore partie s'efface devant elle ;
+  ni par une commande en cours (elle part tout de suite, sans relecture, et
+  une seconde fois quand cette commande se termine), ni par une limite par
+  minute. Une commande plus ancienne pas encore partie s'efface devant elle.
+  Une seconde pause pendant l'envoi de la première est refusée (« une pause
+  est déjà en cours d'envoi ») ;
 - **Reprendre** relance la charge (`Paused=0`) ; refusé si la borne signale
   un défaut ou un état inconnu ;
 - **Courant de charge** : en ampères entiers, de 6 à 32 A, et **toujours
   dans la plage réglée sur la borne** (courant minimal et maximal relus juste
-  avant) ; refusé si la borne ne donne pas cette plage. **Un changement par
-  minute au plus** : ce n'est pas fait pour une régulation fine ;
-- **Pilotage solaire** : le mode de puissance dynamique de la borne
-  (programmation, solaire + minimum, solaire seul, solaire + réseau, arrêt…).
-  Il n'agit que si la **modulation dynamique** est activée sur la borne (dans
-  l'application V2C).
+  avant) ; refusé si la borne ne donne pas cette plage ;
+- **Pilotage solaire** : le mode de puissance dynamique de la borne (voir
+  ci-dessous). Tout mode autre que « Arrêt » peut prendre de la puissance et
+  donc **démarrer une charge** : il est refusé, comme « Reprendre », si la
+  borne signale un défaut ou un état inconnu.
+
+**Un changement par minute au plus** par borne pour le courant, le pilotage
+solaire et la reprise (ce n'est pas fait pour une régulation fine) ; jamais
+pour la pause.
+
+### Les modes de pilotage solaire
+
+Ce que dit pytrydan de chaque valeur (`DynamicPowerMode`) ; l'effet exact
+dépend de la borne et de son installation (non vérifié) :
+
+- **Programmation (application ou cloud V2C)** : la borne suit le profil
+  horaire réglé dans l'application V2C ; il peut charger **sur le réseau** ;
+- **Sans programmation** : le profil horaire est désactivé ; la borne charge
+  sur le réseau à la consigne de courant ;
+- **Solaire + puissance minimale** : le surplus solaire, plus une puissance
+  minimale **prise sur le réseau** ;
+- **Solaire seul** : seulement le surplus solaire ;
+- **Solaire + réseau** : le surplus solaire, complété **par le réseau** ;
+- **Arrêt** : le mode « stop » de la borne, qui ne prend pas de puissance ;
+  ce n'est pas la même chose que « Mettre la charge en pause » (`Paused`) :
+  pour suspendre une charge, utilisez la pause.
+
+Les modes solaires n'agissent que si la **modulation dynamique** est activée
+sur la borne (dans l'application V2C) : avec « Modulation dynamique » à non,
+un changement de mode est accepté mais sans effet, et l'écran de
+configuration le signale. En modulation dynamique, la borne règle elle-même
+son courant : le « courant de charge » envoyé depuis Gladys n'est **pas un
+plafond** et peut être remplacé par la borne.
 
 Ni le verrouillage, ni le câblage (phases), ni la plage de courant, ni la
 programmation, ni la puissance contractuelle ne se changent depuis Gladys.
@@ -102,8 +139,8 @@ Avant chaque commande, l'intégration **relit la borne** et décide sur cette
 lecture seule ; l'option est revérifiée juste avant l'envoi. Une commande
 inutile (déjà dans cet état) n'est pas envoyée. Une commande qui ne peut pas
 partir dans les 3,5 secondes est refusée sans être envoyée. Si la borne ne
-confirme pas (silence, erreur 5xx), Gladys affiche « Commande envoyée, sans
-confirmation » : vérifiez l'état, relu 5 puis 20 secondes plus tard. La
+confirme pas (silence, erreur 5xx, réponse autre que « OK »), Gladys affiche
+« Commande envoyée, sans confirmation » : vérifiez l'état, relu 5 puis 20 secondes plus tard. La
 borne répond « OK » quand elle **accepte** un réglage ; si la relecture
 montre qu'elle ne l'a pas appliqué (pilotage solaire, programmation…),
 l'écran de configuration le signale. Une commande à la fois par borne, la

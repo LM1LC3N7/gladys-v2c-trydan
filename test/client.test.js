@@ -84,7 +84,11 @@ test('parseRealTime reads own fields only', () => {
 
 test('the ID and ChargeMode', () => {
   assert.equal(idOf(' AB12cd '), 'ab12cd');
-  for (const value of ['', 'a-b', 'é', 'x'.repeat(33), 12, null]) {
+  // M7: a numeric ID (string or number), up to 64 characters, never a "-".
+  assert.equal(idOf('0123456789'), '0123456789');
+  assert.equal(idOf(123456), '123456');
+  assert.equal(idOf('x'.repeat(64)), 'x'.repeat(64));
+  for (const value of ['', 'a-b', '-1', 'é', 'x'.repeat(65), -12, 1.5, NaN, null, {}]) {
     assert.equal(idOf(value), undefined, String(value));
   }
   assert.equal(parseChargeMode('1\r\n'), 1);
@@ -133,7 +137,7 @@ test('writes: three keywords only, integers only, "OK" required, never sent late
   }
   body = 'ERROR';
   await assert.rejects(client.write(address, 'Paused', 1, options), {
-    kind: ERROR_KINDS.REFUSED,
+    kind: ERROR_KINDS.UNCONFIRMED,
   });
   now = 2001;
   await assert.rejects(client.write(address, 'Paused', 1, options), { kind: ERROR_KINDS.LATE });

@@ -1,8 +1,9 @@
 // -----------------------------------------------------------------------------
 // What must survive a restart, in /data (the only writable place of the
 // container): the end of a 429 pause, so a restart never reads a station that
-// asked to slow down before its time. Bounded when read back: never more
-// than the longest pause (6 h) away. No secret: the local API has none. The
+// asked to slow down before its time (bounded when read back: never more
+// than the longest pause, 6 h, away), and the ID last given at each address.
+// No secret: the local API has none. The
 // file is readable by the container user only (0600).
 // -----------------------------------------------------------------------------
 
@@ -50,13 +51,33 @@ export function memoryStore(initial = null) {
   };
 }
 
-/** The persisted state, repaired and bounded: `{ pause: { until } | null }`. */
+/**
+ * The persisted state, repaired and bounded:
+ * `{ pause: { until } | null, ids: { [address]: ID } }` — `ids`: the ID last
+ * given at each address, so a read without ID keeps its device (16 at most,
+ * own keys only, strict patterns).
+ */
 export function normalizeMemory(raw, now) {
-  const until = raw && typeof raw === 'object' ? raw.pause?.until : undefined;
+  const object = raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : {};
+  const until = object.pause?.until;
+  const ids = Object.create(null);
+  const saved = Object.hasOwn(object, 'ids') ? object.ids : undefined;
+  if (saved && typeof saved === 'object' && !Array.isArray(saved)) {
+    for (const [key, id] of Object.entries(saved).slice(0, 16)) {
+      if (
+        /^[0-9a-z.:-]{1,260}$/.test(key) &&
+        typeof id === 'string' &&
+        /^[0-9a-z]{1,64}$/.test(id)
+      ) {
+        ids[key] = id;
+      }
+    }
+  }
   return {
     pause:
       Number.isFinite(until) && until > now
         ? { until: Math.min(until, now + TIMINGS.rateLimitMax) }
         : null,
+    ids,
   };
 }

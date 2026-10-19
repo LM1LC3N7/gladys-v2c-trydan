@@ -21,6 +21,11 @@ up to date at the end of every milestone.
       and solar mode selects behind `allow_commands` (off), backoff, 429
       pause in /data, test button, docs en/fr, cover. Tested against made-up
       answers only.
+- [x] **Milestone 1 fixes — review** (2026-10-19): a refused command never
+      cancels the pause sent again (I1), a pause over a command in flight
+      goes without a read (I2), the modes that take power refused like
+      resume (I3), and M1-M9 (see Decisions). Scenarios S1-S7 of the
+      reviewer, inverted, and one test per point in `test/review.test.js`.
 - [ ] **Milestone 2 — real station**: run against a real Trydan (firmware
       1.6.x and 2.x), turn the answers (anonymized) into fixtures, check the
       points below.
@@ -45,6 +50,14 @@ up to date at the end of every milestone.
 - Whether `ChargeEnergy` and `ChargeTime` reset at each session.
 - How the station behaves with two clients (V2C app, Home Assistant, evcc)
   writing at the same time.
+- The effect of each solar mode: whether "stop" (5) stops a charge in
+  progress and what it does to `Paused`; what "timed" (0) and "timed-off"
+  (1) really do (charge from the grid at once? follow the app profile?);
+  whether a change of mode lifts `Paused` (a pause pressed, then a mode set
+  from a scene: does the charge restart?).
+- Whether the station handles one HTTP request at a time (ESP-IDF httpd):
+  a read waiting behind a slow write (I2), the timeouts to choose.
+- Whether the solar mode is kept in flash (one change a minute kept for it).
 
 ## Decisions
 
@@ -77,7 +90,15 @@ up to date at the end of every milestone.
   other missing keywords (LEDs, voltage) are simply not published. Reads are
   never retried at once (pytrydan's tenacity retry is not ported): spaced
   new tries 30 s, 1, 2, 5 min, never under the interval.
-- **Identity**: `ID` lower case (`[0-9a-z]{1,32}`) when given, else the
+- **Identity kept per address** (M1): the last `ID` given at an address is
+  kept in memory and in `/data` (`ids`, 16 at most, strict patterns when
+  read back); a read without ID keeps that identity (no flip to the address
+  id, no "not read any more"); another ID at that address is another station
+  and replaces it. The fresh read of a command uses the same rule.
+- **ID format** (M7): letters and digits, lower case, up to 64 characters,
+  never a "-" (the address ids have one); a whole JSON number is read as its
+  digits.
+- **Identity**: `ID` lower case when given, else the
   address (`ip-192-168-1-60`, `host-trydan-local`, `-<port>`). The fixtures
   of pytrydan have no `ID`: such a station is keyed by its address, and
   changing the address gives a new device (docs). A station whose ID appears
@@ -127,11 +148,44 @@ up to date at the end of every milestone.
   `MaxIntensity` read then (each 6 – 32 A, min ≤ max) or when they are
   missing; nothing sent when already so (unless a guard holds); sent within
   3.5 s of the click or refused unsent, answered by 4.3 s. Outcomes: 200
-  "OK" → success (accepted); 200 without "OK" or a 4xx → "refused by the
-  station"; silence, a cut or a 5xx → **"sent, without confirmation"** +
+  "OK" → success (accepted); a 4xx → "refused by the station"; 200 without
+  "OK" (M2), silence, a cut or a 5xx → **"sent, without confirmation"** +
   guard; nothing connected → "not sent"; deadline passed → "answered too
   slowly". Reads 5 s and 20 s after, each a new read (`freshTick`). The ack
   never waits for Gladys.
+- **Review fixes** (2026-10-19):
+  - I1: the pause is sent again after the command it overtook unless a newer
+    command **reached the station** since (`lastAccepted`, set only when a
+    write may have left); a command refused ("still running", "a pause is
+    already being sent", too often…) never cancels it. `lastPause` stays set
+    on arrival.
+  - I2: a pause over a command in flight writes `Paused=1` without a fresh
+    read (a station handling one request at a time would make the read wait
+    behind the slow write and time out); the option and the station are
+    still checked before the write.
+  - I3: any solar mode but "stop" may take power and start a charge: refused
+    like "Resume" on a fault (ChargeState 4, 5) or an unknown state; "stop"
+    always allowed. Docs say a mode that takes grid power may start a charge.
+  - M2: a 200 whose body is not exactly "OK" is "sent, without
+    confirmation" (kind `unexpected_answer`), with guard and reads after;
+    only a 4xx is "refused by the station".
+  - M3: writes are numbered per kind; the "accepted without applying it"
+    check of a write is skipped when a newer write of that kind left after
+    it (a pause over a resume, the pause sent again).
+  - M4: one change a minute per station for the current, the solar mode and
+    resume (`TIMINGS.commandMinInterval`), counted from the write, restored
+    when the write never connected; never for the pause.
+  - M5: docs of each mode (grid or not, "timed", "Stop" is not the pause,
+    the current is not a ceiling under dynamic modulation); a mode other
+    than stop set while `Dynamic` is 0 is said in the status until a read
+    shows `Dynamic` 1.
+  - M6: a host name is resolved once per command (`resolveUnicast`, unicast
+    IPv4 only): the read, the write and the pause sent again go to that one
+    address; no usable address refuses the command unsent.
+  - M8: docs of a station typed twice (one device by ID, read twice, commands
+    through the address that answers).
+  - M9: a second pause while one is being sent: "a pause is already being
+    sent", not "another command is running".
 - **Pause first** (gladys-keba I1): never refused for a command in flight
   (the other kinds are refused at once while one runs); it goes at once; a
   command that arrived before it and has not written yet is refused unsent
@@ -139,10 +193,11 @@ up to date at the end of every milestone.
   overtook settles, if that one did write and no newer command arrived.
   Never limited by the one-a-minute rule. A 429 pause (station asking to
   slow down) still holds it, as every path.
-- **One current a minute per station** (gladys-keba I3,
-  `TIMINGS.intensityMinInterval`): counted from the write; a change sooner is
-  refused unsent ("Pause charging stays available"); a write that never
-  connected does not start the minute.
+- **One change a minute per station** (gladys-keba I3, review M4,
+  `TIMINGS.commandMinInterval`): the current, the solar mode and resume;
+  counted from the write; a change sooner is refused unsent ("Pause
+  charging stays available"); a write that never connected does not start
+  the minute.
 - **Accepted, not applied** (gladys-keba I4): "OK" means accepted; after the
   last read (20 s) a value still not the one asked is logged once (warning)
   and added to the status ("accepted … without applying it (solar control,

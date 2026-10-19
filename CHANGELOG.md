@@ -34,6 +34,16 @@ the notes of the version's GitHub Release.
 - Reads every 30 s (configurable); `ChargeMode` read alone at most once an
   hour when RealTimeData lacks it; failures retried after 30 s to 5 minutes;
   a 429 pauses every path, kept in `/data`.
+- Review fixes: a refused command never cancels the pause sent again; a
+  pause over a command in flight is sent without waiting for a read; a solar
+  mode that may take power is refused on a fault or an unknown state, like
+  resume; the station keeps its device when one read misses its ID (kept in
+  `/data`); a 200 other than "OK" is "sent, without confirmation"; no "not
+  applied" note for a command a newer one overrode; one change a minute for
+  the solar mode and resume too (never the pause); one DNS resolution per
+  command; numeric IDs up to 64 characters; a solar mode set while dynamic
+  modulation is off is said in the status; docs of the modes and of a
+  station typed twice.
 - "Test the connection" button; documentation in English and French;
   `LICENSE` and `THIRD_PARTY_NOTICES.md` (pytrydan, MIT) shipped in the image.
 

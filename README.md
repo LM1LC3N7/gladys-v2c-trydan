@@ -47,8 +47,12 @@ Gladys ⇄ SDK ⇄ src/handlers.js ⇄ src/app.js (TrydanApp)
   answered by 4.3 s; a silence or a 5xx is "sent, without confirmation",
   followed by reads 5 s and 20 s later; "OK" is "accepted", checked against
   the last read. The current stays within `MinIntensity`..`MaxIntensity`
-  read just before, one change a minute. **Pause is never blocked** (sent
-  over a command in flight, again after it; older unsent commands give way).
+  read just before; the current, the solar mode and resume one change a
+  minute; a mode other than stop refused like resume on a fault or an
+  unknown state. **Pause is never blocked** (sent over a command in flight
+  without a read, again after it; older unsent commands give way). The ID
+  seen at an address is kept in `/data`; a host name is resolved once per
+  command.
 - **Hostile answers**: 16 KB at most, only own fields read with their exact
   type (no prototype pollution; a missing value refuses a command), no
   answer text in the logs.

@@ -29,8 +29,11 @@ export const ERROR_KINDS = Object.freeze({
   PROTOCOL: 'protocol',
   /** The time a command was given ran out before its request: nothing was sent. */
   LATE: 'late',
-  /** A write answered 200 without "OK": received and refused by the station. */
-  REFUSED: 'refused',
+  /**
+   * A write answered 200 without "OK" (another spelling, an empty body):
+   * received, maybe applied; never announced as refused.
+   */
+  UNCONFIRMED: 'unexpected_answer',
 });
 
 export class StationError extends Error {
@@ -83,6 +86,17 @@ export function unicastLookup(resolve = dnsLookup) {
       }
     });
   };
+}
+
+/**
+ * A host name -> one unicast IPv4 address (a promise), resolved once so the
+ * read and the write of a command go to the same station. Rejects with
+ * ENOTUNICAST when the name gives none.
+ */
+export function resolveUnicast(hostname, resolve = dnsLookup) {
+  return new Promise((done, fail) => {
+    unicastLookup(resolve)(hostname, {}, (err, address) => (err ? fail(err) : done(address)));
+  });
 }
 
 const lookup = unicastLookup();

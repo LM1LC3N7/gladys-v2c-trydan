@@ -85,8 +85,11 @@ test/                             node --test, against the SDK's fake Gladys (in
   `src/trydan/http.js`). Commands stay behind `allow_commands` (off by
   default), are decided on a fresh RealTimeData, are checked again right
   before the write, never use a switch; the current stays within
-  `MinIntensity`..`MaxIntensity` read then, one change a minute per station.
-  "Pause charging" is never held back (sent over a command in flight, again
-  after it, older unsent commands give way). "OK" means accepted, not
+  `MinIntensity`..`MaxIntensity` read then; one change a minute per station
+  for the current, the mode and resume; a mode other than stop is refused
+  like resume on a fault or an unknown state. "Pause charging" is never held
+  back (sent over a command in flight without a read, again after it unless
+  a newer command reached the station; older unsent commands give way). The
+  identity of an address survives a read without ID (`/data`). "OK" means accepted, not
   applied. The energies stay plain sensors, never an `index`/`energy`
   feature.

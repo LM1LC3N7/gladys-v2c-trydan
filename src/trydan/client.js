@@ -35,13 +35,21 @@ function text(value) {
   return clean === '' ? undefined : clean.slice(0, LIMITS.textLength);
 }
 
-/** The `ID` of the station, lower case, letters and digits only; else undefined. */
+/**
+ * The `ID` of the station, lower case, letters and digits only (never "-":
+ * the address ids have one), 64 characters at most; a whole number (a
+ * numeric ID sent as a JSON number) is read as its digits. Else undefined.
+ */
 export function idOf(value) {
-  if (typeof value !== 'string') {
+  let text = value;
+  if (typeof value === 'number') {
+    text = Number.isSafeInteger(value) && value >= 0 ? String(value) : undefined;
+  }
+  if (typeof text !== 'string') {
     return undefined;
   }
-  const id = value.trim().toLowerCase();
-  return /^[0-9a-z]{1,32}$/.test(id) ? id : undefined;
+  const id = text.trim().toLowerCase();
+  return /^[0-9a-z]{1,64}$/.test(id) ? id : undefined;
 }
 
 /**
@@ -156,7 +164,8 @@ export class TrydanClient {
   /**
    * One write, never retried: `keyword` one of WRITABLE, `value` an integer
    * already checked by the caller. `startBy`: refused unsent (LATE) after it.
-   * Resolves when the station answered "OK"; a 200 without it is REFUSED.
+   * Resolves when the station answered "OK"; a 200 without it is
+   * UNCONFIRMED (received, maybe applied).
    */
   async write(address, keyword, value, { startBy, timeoutMs }) {
     if (!WRITABLE.includes(keyword) || !Number.isInteger(value) || value < 0 || value > 99) {
@@ -167,7 +176,7 @@ export class TrydanClient {
     }
     const response = await this.get(address, PATHS.write(keyword, value), timeoutMs);
     if (response.body.trim() !== 'OK') {
-      throw new StationError(ERROR_KINDS.REFUSED, 'Answer is not OK');
+      throw new StationError(ERROR_KINDS.UNCONFIRMED, 'Answer is not OK');
     }
   }
 }

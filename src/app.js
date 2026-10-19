@@ -24,6 +24,7 @@
 //     before, one change a minute per station at most.
 // -----------------------------------------------------------------------------
 
+import { isIP } from 'node:net';
 import { DEVICE_TRANSPORTS, createLogger } from '@gladysassistant/integration-sdk';
 import { addressId, addressKey, normalizeConfig } from './config.js';
 import {
@@ -49,10 +50,17 @@ import { ERRORS, STATUS_NAMES, T, age, summaryOf, word } from './i18n.js';
 import { StatePublisher } from './publisher.js';
 import { fileStore, normalizeMemory } from './store.js';
 import { TrydanClient, errorReason } from './trydan/client.js';
-import { ERROR_KINDS } from './trydan/http.js';
+import { ERROR_KINDS, resolveUnicast } from './trydan/http.js';
 
 const both = (en, fr) => ({ en, fr });
 const join = (a, b) => both(`${a.en} ${b.en}`, `${a.fr} ${b.fr}`);
+
+/** The commands held to one change a minute per station (never the pause), by key. */
+const RATE_LIMITED_ROLES = {
+  [FEATURES.SET_INTENSITY]: 'intensity',
+  [FEATURES.SET_SOLAR_MODE]: 'mode',
+  [FEATURES.RESUME]: 'resume',
+};
 
 /** The value a command kind watches in a read. */
 const WATCHED = {
@@ -69,8 +77,10 @@ export class TrydanApp {
     now = Date.now,
     timers = globalThis,
     store = fileStore(),
+    resolve = resolveUnicast,
   }) {
     this.gladys = gladys;
+    this.resolve = resolve;
     this.logger = logger;
     this.now = now;
     this.timers = timers;
@@ -93,8 +103,14 @@ export class TrydanApp {
     /** id -> number of commands that arrived; id -> number of the last pause. */
     this.commandCount = new Map();
     this.lastPause = new Map();
-    /** id -> when the last charging current was sent (one a minute). */
-    this.lastIntensityAt = new Map();
+    /** id -> the number of the newest command that reached the station. */
+    this.lastAccepted = new Map();
+    /** `${id}:intensity|mode|resume` -> when it was last sent (one a minute). */
+    this.lastSentAt = new Map();
+    /** `${id}:${kind}` -> number of writes of that kind. */
+    this.writes = new Map();
+    /** ids whose solar mode was set while dynamic modulation is off. */
+    this.dynamicOff = new Set();
     /** `${id}:${kind}` -> { from, expected, moved, until }: a command sent, not seen yet. */
     this.guards = new Map();
     /** `${id}:${kind}` -> expected: accepted ("OK") but not applied by the last check. */
@@ -128,6 +144,9 @@ export class TrydanApp {
           chargeMode: undefined,
           chargeModeAt: -Infinity,
           chargeModeMissing: false,
+          // The ID last given at this address (kept in /data): a read
+          // without ID keeps this identity (M1).
+          knownId: this.memory.ids[addressKey(address)],
         },
       ]),
     );
@@ -342,9 +361,23 @@ export class TrydanApp {
   }
 
   /** A read answered: the station as read, and the guards it may lift. */
+  /**
+   * The platform id of a read: its ID, else the ID last given at this
+   * address (M1: a read without ID never flips the identity), else the address.
+   */
+  platformIdOf(station, snapshot) {
+    return snapshot.id ?? station.knownId ?? addressId(station.address);
+  }
+
   applyRead(station, snapshot) {
-    snapshot.platformId = snapshot.id ?? addressId(station.address);
-    snapshot.label = snapshot.id ? snapshot.id.slice(-4).toUpperCase() : station.key;
+    if (snapshot.id && snapshot.id !== station.knownId) {
+      station.knownId = snapshot.id;
+      this.memory.ids[station.key] = snapshot.id;
+      this.saveMemory();
+    }
+    snapshot.platformId = this.platformIdOf(station, snapshot);
+    const id = snapshot.id ?? station.knownId;
+    snapshot.label = id ? id.slice(-4).toUpperCase() : station.key;
     if (snapshot.chargeMode === undefined) {
       snapshot.chargeMode = station.chargeMode;
     }
@@ -409,6 +442,9 @@ export class TrydanApp {
     if (kinds.length > 0) {
       const list = both(kinds.map((k) => k.en).join(', '), kinds.map((k) => k.fr).join(', '));
       summary = join(summary, T.notApplied(name, list));
+    }
+    if (this.dynamicOff.has(s.platformId)) {
+      summary = join(summary, T.dynamicOff(name));
     }
     return summary;
   }
@@ -715,24 +751,30 @@ export class TrydanApp {
     }
     const { id, role } = target;
     const pause = role === FEATURES.PAUSE;
-    if (role === FEATURES.SET_INTENSITY) {
-      const last = this.lastIntensityAt.get(id);
+    // One change a minute per station for the current, the mode and resume
+    // (M4); never for a pause.
+    const limited = RATE_LIMITED_ROLES[role];
+    if (limited) {
+      const last = this.lastSentAt.get(`${id}:${limited}`);
       const since = last === undefined ? Infinity : received - last;
-      if (since >= 0 && since < TIMINGS.intensityMinInterval) {
-        throw this.refusal(ERRORS.intensityTooOften(age(TIMINGS.intensityMinInterval - since)));
+      if (since >= 0 && since < TIMINGS.commandMinInterval) {
+        throw this.refusal(ERRORS.tooOften(age(TIMINGS.commandMinInterval - since)));
       }
     }
     const seq = (this.commandCount.get(id) ?? 0) + 1;
     this.commandCount.set(id, seq);
     if (pause) {
-      // An older command of this station that has not left yet gives way
-      // (checkBeforeSend).
+      // Set on arrival: an older command of this station that has not left
+      // yet gives way (checkBeforeSend).
       this.lastPause.set(id, seq);
     }
     // One command at a time per station; a pause is never refused for a
     // command in flight (it goes at once, and again once that one settles).
     const previous = this.inFlight.get(id);
-    if (previous && (!pause || previous.role === FEATURES.PAUSE)) {
+    if (previous && previous.role === FEATURES.PAUSE) {
+      throw this.refusal(pause ? ERRORS.pauseRunning : ERRORS.stillRunning);
+    }
+    if (previous && !pause) {
       throw this.refusal(ERRORS.stillRunning);
     }
     const entry = {
@@ -780,6 +822,16 @@ export class TrydanApp {
     }
   }
 
+  /** A command that may start a charge: refused on a fault or an unknown state. */
+  refuseUnsafeStart(s) {
+    if (FAULT_STATES.has(s.chargeState)) {
+      throw this.refusal(ERRORS.fault(STATUS_NAMES[s.chargeState]));
+    }
+    if (s.chargeState === undefined) {
+      throw this.refusal(ERRORS.unknownStatus);
+    }
+  }
+
   /** What to send, from the station just read; undefined when it is already so. */
   plan(role, wanted, s, id, entry) {
     if (role === FEATURES.PAUSE) {
@@ -794,12 +846,7 @@ export class TrydanApp {
       if (s.paused === undefined) {
         throw this.refusal(ERRORS.missing);
       }
-      if (FAULT_STATES.has(s.chargeState)) {
-        throw this.refusal(ERRORS.fault(STATUS_NAMES[s.chargeState]));
-      }
-      if (s.chargeState === undefined) {
-        throw this.refusal(ERRORS.unknownStatus);
-      }
+      this.refuseUnsafeStart(s);
       if (s.paused === 0 && !this.guardActive(id, 'paused')) {
         return undefined;
       }
@@ -810,6 +857,11 @@ export class TrydanApp {
         throw this.refusal(ERRORS.missing);
       }
       const value = SOLAR_MODES[wanted];
+      // Any mode but "stop" may take power (from the grid, the sun or a
+      // schedule) and so start a charge: the checks of "Resume" (I3).
+      if (value !== SOLAR_MODES.stop) {
+        this.refuseUnsafeStart(s);
+      }
       if (s.solarMode === value && !this.guardActive(id, 'mode')) {
         return undefined;
       }
@@ -868,38 +920,57 @@ export class TrydanApp {
     const sendBy = received + TIMINGS.commandSendBy;
     this.checkBeforeSend(generation, id, entry);
     const station = this.stationOf(id);
-    const readBudget = Math.min(
-      TIMINGS.commandReadMax,
-      sendBy - TIMINGS.commandMinSend - this.now(),
-    );
-    if (readBudget < TIMINGS.commandMinRead) {
-      throw this.refusal(ERRORS.tooSlow);
-    }
-
-    // The state just before acting, never the one in memory.
-    let fresh;
+    // One DNS resolution per command: the read and the write go to the
+    // same address (M6).
+    let address;
     try {
-      fresh = await this.client.read(station.address, { timeoutMs: readBudget });
-    } catch (err) {
-      if (err.kind === ERROR_KINDS.RATE_LIMITED) {
-        await this.pause(err);
-        this.updateStatus().catch(() => {});
-      }
-      throw this.refusal(ERRORS.unknownState(errorReason(err)));
+      address = await this.addressOf(station.address);
+    } catch {
+      throw this.refusal(ERRORS.notSent('unreachable'));
     }
+    entry.address = address;
     if (generation !== this.generation) {
       throw this.refusal(ERRORS.unknownStation);
     }
-    if ((fresh.id ?? addressId(station.address)) !== id) {
-      throw this.refusal(ERRORS.otherStation);
-    }
-    this.applyRead(station, fresh);
-    // Shown in the background: the ack never waits for Gladys.
-    this.publishAll().catch((err) => this.logger.warn(`Publishing failed: ${err.message}`));
 
-    const plan = this.plan(role, wanted, fresh, id, entry);
-    if (!plan) {
-      return;
+    let plan;
+    if (role === FEATURES.PAUSE && entry.overtaken) {
+      // A command is in flight: a read now may wait behind its write (a
+      // station that handles one request at a time) and time out. The pause
+      // goes without it (I2): pausing once more is harmless.
+      plan = { keyword: 'Paused', value: 1, kind: 'paused', from: undefined, expected: 1 };
+    } else {
+      const readBudget = Math.min(
+        TIMINGS.commandReadMax,
+        sendBy - TIMINGS.commandMinSend - this.now(),
+      );
+      if (readBudget < TIMINGS.commandMinRead) {
+        throw this.refusal(ERRORS.tooSlow);
+      }
+      // The state just before acting, never the one in memory.
+      let fresh;
+      try {
+        fresh = await this.client.read(address, { timeoutMs: readBudget });
+      } catch (err) {
+        if (err.kind === ERROR_KINDS.RATE_LIMITED) {
+          await this.pause(err);
+          this.updateStatus().catch(() => {});
+        }
+        throw this.refusal(ERRORS.unknownState(errorReason(err)));
+      }
+      if (generation !== this.generation) {
+        throw this.refusal(ERRORS.unknownStation);
+      }
+      if (this.platformIdOf(station, fresh) !== id) {
+        throw this.refusal(ERRORS.otherStation);
+      }
+      this.applyRead(station, fresh);
+      // Shown in the background: the ack never waits for Gladys.
+      this.publishAll().catch((err) => this.logger.warn(`Publishing failed: ${err.message}`));
+      plan = this.plan(role, wanted, fresh, id, entry);
+      if (!plan) {
+        return;
+      }
     }
     // The option may have been turned off during the read: checked again.
     this.checkBeforeSend(generation, id, entry);
@@ -907,14 +978,17 @@ export class TrydanApp {
       throw this.refusal(ERRORS.tooSlow);
     }
     const timeoutMs = Math.max(200, received + TIMINGS.commandAnswerBy - this.now());
-    const previousIntensity = this.lastIntensityAt.get(id);
-    if (plan.kind === 'intensity') {
-      this.lastIntensityAt.set(id, this.now());
+    const limited = RATE_LIMITED_ROLES[role];
+    const minuteKey = limited ? `${id}:${limited}` : undefined;
+    const previousSent = minuteKey ? this.lastSentAt.get(minuteKey) : undefined;
+    if (minuteKey) {
+      this.lastSentAt.set(minuteKey, this.now());
     }
     this.logger.info(`Trydan ${station.key}: ${plan.keyword}=${plan.value}`);
     entry.sent = true;
+    const write = this.countWrite(id, plan.kind);
     try {
-      await this.client.write(station.address, plan.keyword, plan.value, {
+      await this.client.write(address, plan.keyword, plan.value, {
         startBy: sendBy,
         timeoutMs,
       });
@@ -923,10 +997,15 @@ export class TrydanApp {
       this.logger.warn(`Trydan ${station.key}: ${plan.keyword} failed (${reason})`);
       const unsent =
         err.kind === ERROR_KINDS.LATE || err.kind === ERROR_KINDS.UNREACHABLE || err.notSent;
-      if (unsent && plan.kind === 'intensity') {
-        // Never left: the minute starts from the previous one.
-        if (previousIntensity === undefined) this.lastIntensityAt.delete(id);
-        else this.lastIntensityAt.set(id, previousIntensity);
+      if (unsent) {
+        // Never left: the minute starts from the previous one, and it does
+        // not count as a write (a pause is still sent again, M3 check).
+        entry.sent = false;
+        this.uncountWrite(id, plan.kind, write);
+        if (minuteKey) {
+          if (previousSent === undefined) this.lastSentAt.delete(minuteKey);
+          else this.lastSentAt.set(minuteKey, previousSent);
+        }
       }
       if (err.kind === ERROR_KINDS.LATE) {
         throw this.refusal(ERRORS.tooSlow);
@@ -935,26 +1014,64 @@ export class TrydanApp {
         // Nothing accepted the connection, or the error came before the transport.
         throw this.refusal(ERRORS.notSent(reason));
       }
+      this.accepted(id, entry);
       if (err.kind === ERROR_KINDS.RATE_LIMITED) {
         await this.pause(err);
         this.updateStatus().catch(() => {});
         throw this.refusal(ERRORS.refused(reason));
       }
-      if (err.kind === ERROR_KINDS.REFUSED || (err.kind === ERROR_KINDS.HTTP && err.status < 500)) {
+      if (err.kind === ERROR_KINDS.HTTP && err.status < 500) {
         this.followUp(station);
         throw this.refusal(ERRORS.refused(reason));
       }
-      // A 5xx, a silence, a broken answer or any other error after the
-      // transport started: it may have reached the station.
+      // A 5xx, a silence, an answer other than "OK" (M2), or any other error
+      // after the transport started: it may have reached the station.
       this.guard(id, plan);
       this.followUp(station);
       this.pauseAgain(station, id, entry, plan);
       throw this.refusal(ERRORS.sentUnconfirmed(reason));
     }
+    this.accepted(id, entry);
+    if (plan.kind === 'mode') {
+      // A solar mode does nothing while dynamic modulation is off (M5): said
+      // in the status until a read shows it on.
+      if (station.snapshot?.dynamic === 0 && plan.value !== SOLAR_MODES.stop) {
+        this.dynamicOff.add(id);
+        this.logger.warn(`Trydan ${station.key}: solar mode set while dynamic modulation is off`);
+        this.updateStatus().catch(() => {});
+      } else {
+        this.dynamicOff.delete(id);
+      }
+    }
     // "OK" means accepted, not applied: checked after the reads.
     this.guard(id, plan);
-    this.followUp(station, { id, kind: plan.kind, expected: plan.expected });
+    this.followUp(station, { id, kind: plan.kind, expected: plan.expected, write });
     this.pauseAgain(station, id, entry, plan);
+  }
+
+  /** The address to talk to for one command: a host name resolved once (M6). */
+  async addressOf({ host, port }) {
+    return isIP(host) ? { host, port } : { host: await this.resolve(host), port };
+  }
+
+  /** A command that reached the station (sent, answered or not): its intent counts (I1). */
+  accepted(id, entry) {
+    this.lastAccepted.set(id, Math.max(this.lastAccepted.get(id) ?? 0, entry.seq));
+  }
+
+  /** Numbers the writes of one kind: an older check never reports over a newer write (M3). */
+  countWrite(id, kind) {
+    const key = `${id}:${kind}`;
+    const n = (this.writes.get(key) ?? 0) + 1;
+    this.writes.set(key, n);
+    return n;
+  }
+
+  uncountWrite(id, kind, n) {
+    const key = `${id}:${kind}`;
+    if (this.writes.get(key) === n) {
+      this.writes.set(key, n - 1);
+    }
   }
 
   /**
@@ -978,8 +1095,9 @@ export class TrydanApp {
           // The overtaken command never left (it gave way): nothing to undo.
           return;
         }
-        if ((this.commandCount.get(id) ?? 0) !== entry.seq) {
-          // A newer command arrived since this pause: its intent wins.
+        if ((this.lastAccepted.get(id) ?? 0) > entry.seq) {
+          // A newer command reached the station since this pause: its intent
+          // wins. A refused one ("still running") never counts (I1).
           this.logger.info(`Trydan ${station.key}: pause not sent again (newer command)`);
           return;
         }
@@ -988,7 +1106,8 @@ export class TrydanApp {
           return;
         }
         this.logger.warn(`Trydan ${station.key}: pause sent again after the command in flight`);
-        await this.client.write(station.address, 'Paused', 1, {
+        this.countWrite(id, 'paused');
+        await this.client.write(entry.address, 'Paused', 1, {
           startBy: Infinity,
           timeoutMs: TIMINGS.readTimeout,
         });
@@ -1027,12 +1146,17 @@ export class TrydanApp {
   }
 
   /** After the last read: an accepted command whose value never came is reported once. */
-  async checkApplied(station, { id, kind, expected }) {
+  async checkApplied(station, { id, kind, expected, write }) {
     const s = station.snapshot;
+    const key = `${id}:${kind}`;
     if (station.online === false || s?.platformId !== id) {
       return;
     }
-    const key = `${id}:${kind}`;
+    if (this.writes.get(key) !== write) {
+      // A newer write of this kind left after it (a pause over a resume):
+      // it overrode this one on purpose, nothing to report (M3).
+      return;
+    }
     const value = WATCHED[kind](s);
     if (value === expected) {
       this.notApplied.delete(key);
@@ -1075,6 +1199,9 @@ export class TrydanApp {
   /** A read of a station, through its guards: never lifted on an unknown value. */
   observe(snapshot) {
     const id = snapshot.platformId;
+    if (snapshot.dynamic === 1) {
+      this.dynamicOff.delete(id);
+    }
     for (const [kind, read] of Object.entries(WATCHED)) {
       const value = read(snapshot);
       if (value === undefined) {

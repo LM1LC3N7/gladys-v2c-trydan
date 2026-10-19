@@ -438,7 +438,11 @@ test('outcomes: "OK" missing, unreachable, silence', async (t) => {
   const { server, press, station, advance } = await setup(t, { config: ALLOWED });
   station.applies = false;
   station.writeBody = 'ERROR';
-  assert.match(await failure(press('pause-charge')), /a refusé la commande/);
+  // M2: an answer other than "OK" may still have been applied.
+  assert.match(
+    await failure(press('pause-charge')),
+    /envoyée, sans confirmation \(unexpected_answer\)/,
+  );
   station.writeBody = undefined;
   station.writeStatus = 500;
   assert.match(await failure(press('pause-charge')), /envoyée, sans confirmation \(HTTP 500\)/);

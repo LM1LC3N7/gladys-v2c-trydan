@@ -161,6 +161,10 @@ export const TIMINGS = {
   followUps: [5 * SECOND, 20 * SECOND],
   /** A sent command keeps its guard until the state moves to what it asked, or 90 s. */
   guard: 90 * SECOND,
-  /** One charging current a minute per station at most (no fine regulation). */
-  intensityMinInterval: MINUTE,
+  /**
+   * One change a minute per station at most for the charging current, the
+   * solar mode and resume (no fine regulation; settings likely kept in
+   * flash). Never for a pause.
+   */
+  commandMinInterval: MINUTE,
 };
