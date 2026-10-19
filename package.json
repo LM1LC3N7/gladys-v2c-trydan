@@ -1,6 +1,6 @@
 {
   "name": "gladys-v2c-trydan",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "description": "Gladys Assistant external integration for V2C Trydan EV chargers (state, power, charging current, session energy, solar control; optional pause, current and solar mode), over their local API. Unofficial, not affiliated with V2C.",
   "type": "module",
